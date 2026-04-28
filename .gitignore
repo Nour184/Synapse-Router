@@ -1,1 +1,15 @@
-{\rtf1}
+
+#for python
+__pycache__/
+.venv/
+venv/
+*.py[cod]
+
+.env
+
+data/
+dump.rdp
+ollama_data/
+
+.DS_Store
+Thumbs.db
