@@ -4,6 +4,8 @@ services:
 
   gateway:
     build: ./gateway  #build the Dockerfile inside the gateway folder
+    volumes:
+    - ./gateway/logs:/var/log/nginx  # Save logs here so i can use it in debugging
     ports:
     - "80:80"
     depends_on:
@@ -25,10 +27,21 @@ services:
       - OLLAMA_HOST=ollama   # Tell Python where to find the AI model
     depends_on:
       - redis
-      - ollama  
+      #- ollama  
     networks:
       - synaptic-network
     
+  worker-2:
+    build: ./working-nodes
+    environment:
+      - REDIS_HOST=redis
+      - OLLAMA_HOST=ollama
+    depends_on:
+      - redis
+      #- ollama
+    networks:
+      - synaptic-network
+
   ollama:
     image: "ollama/ollama:latest"
     volumes: 
