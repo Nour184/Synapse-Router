@@ -6,7 +6,7 @@ app = FastAPI()
 @app.api_route("/api/", methods=["GET", "POST"])
 async def catch_all(request: Request):
     # get the header that NGINX Lua script injected!
-    req_id = request.headers.get("X-Request-ID", "No ID Found")
+    req_id = request.headers.get("x-request-id", "No ID Found")
     
     return {
         "status": "success",

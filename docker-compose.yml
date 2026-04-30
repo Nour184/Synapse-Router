@@ -6,6 +6,7 @@ services:
     build: ./gateway  #build the Dockerfile inside the gateway folder
     volumes:
     - ./gateway/logs:/var/log/nginx  # Save logs here so i can use it in debugging
+    - ./gateway/lua:/usr/local/openresty/lua/ # Copy the Lua scripts to the container
     ports:
     - "80:80"
     depends_on:
