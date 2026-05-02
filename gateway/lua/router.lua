@@ -1,43 +1,61 @@
---external lua script fpr load balancing and accessing redis
+local balancer = require "ngx.balancer"
+local state = ngx.shared.router_state
 
---notice lua tables start with index 1
-local worker_nodes = {
-    { name = "worker-1", url ="worker:8000"}, --change these when using tailscale
-    { name = "worker-2", url = "worker-2:8000"}
+-- local worker_nodes = {  
+--     { name = "worker-1", ip = "100.x.x.x", port = 5000 }, 
+--     { name = "worker-2", ip = "100.x.x.x", port = 5001 },
+--     { name = "worker-3", ip = "100.x.x.x", port = 5002 }
+-- }
+
+--just for testing on my machine now
+local worker_nodes = {  
+    { name = "local-worker-1", ip = "172.19.208.1", port = 5000 }, 
+    { name = "local-worker-2", ip = "172.19.208.1", port = 5001 },
+    { name = "local-worker-3", ip = "172.19.208.1", port = 5002 }
 }
 
-local req_id = "req-"..tostring(ngx.time()).."-"..math.random(1000,9999) --give a unique id to each req
+local req_id = ngx.req.get_headers()["x-request-id"]
 
---inject the requst id in the request sent to the nodes
-ngx.req.set_header("x-request-id", req_id)
-ngx.req.read_body() --buffer the request body so that it can be read by the lua script and also sent to the worker nodes
+if not ngx.ctx.tries_set then
+    -- change  this number for when i knwo how many nodes we are gonna have 
+    balancer.set_more_tries(2) 
+    ngx.ctx.tries_set = true
+end
 
-local request_body = ngx.req.get_body_data() or "{}"  --get the request body as a string
+-- 1. IF THIS IS A RETRY: Ban the node that just dropped the connection
+local state_name = balancer.get_last_failure()
+if state_name == "failed" and ngx.ctx.last_node then
+    ngx.log(ngx.ERR, "TCP connection failed on " .. ngx.ctx.last_node .. ". Banning for 5 mins.")
+    state:set("banned_" .. ngx.ctx.last_node, true, 300) 
+end
 
+-- 2. FILTER OUT BANNED NODES
+local healthy_nodes = {}
+for _, node in ipairs(worker_nodes) do
+    if not state:get("banned_" .. node.name) then
+        table.insert(healthy_nodes, node)
+    end
+end
 
-local state = ngx.shared.router_state --access the 1MB shared memory dictionary defined in nginx.conf to store the state of the router
-local curr_count = state:incr("request_counter",1,0) --increment a counter by 1 (starrting by 0) to keep track of the current request number recieved
+-- If all nodes are dead, return a 502 error immediately
+if #healthy_nodes == 0 then
+    ngx.log(ngx.ERR, "FATAL: All worker nodes are currently banned or dead!")
+    return ngx.exit(502)
+end
 
-local worker_node_index = (curr_count % #worker_nodes) + 1 --use modulo to select the worker node index in a round-robin way
-local target_node_name = worker_nodes[worker_node_index].name --get the name of the target worker node
-local target_node_url = worker_nodes[worker_node_index].url
+-- 3. LOAD BALANCE ONLY AMONG HEALTHY NODES
+local current_count = state:incr("request_counter", 1, 0) 
+local worker_index = (current_count % #healthy_nodes) + 1
+local chosen_worker = healthy_nodes[worker_index]
 
+-- Save the chosen node to Nginx context so we know who to ban if the connection fails
+ngx.ctx.last_node = chosen_worker.name
 
+if req_id then 
+    state:set("tracking_" .. req_id, chosen_worker.name, 300) 
+end
 
-
---save the request to redis 
-local redis = require "resty.redis"
-local red = redis:new()
-red:set_timeout(1500,1000,1500) --1 sec timeout for connect, read, and write
-
-local ok, err = red:connect("redis",6379) --connect to redis server unning on port 6379 in the redis container
-if ok then 
-    local json_data = '{"request_id":"' .. req_id .. '", "node":"' .. target_node_name .. '", "payload":' .. request_body .. '}' --json envelope to store the request data in redis
-    red:hset("requests:"..target_node_name, req_id, json_data) --store the request data in a hash with the key "requests:worker-1" or "requests:worker-2" and the field as the request id
-    
-    red:set_keepalive(10000, 100) --leave the connection to redis opened to 10secs and allow up to 100 simultaneous connections 
-else 
-    ngx.log(ngx.ERR,"Failed to connect to Redis: ", err) --log the error if failed but wont stop the request from being processed by the worker nodes
-end 
-
-ngx.var.assigned_worker = target_node_url --set the global variable to the chosen worker node url so that it can be used by proxy_pass in nginx.conf
+local ok, error = balancer.set_current_peer(chosen_worker.ip, chosen_worker.port) 
+if not ok then
+    ngx.log(ngx.ERR, "Failed to set the current peer:", error) 
+end
