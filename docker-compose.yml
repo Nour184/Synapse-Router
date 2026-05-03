@@ -4,6 +4,9 @@ services:
 
   gateway:
     build: ./gateway  #build the Dockerfile inside the gateway folder
+    profiles: ["control"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
     - ./gateway/logs:/var/log/nginx  # Save logs here so i can use it in debugging
     - ./gateway/lua:/usr/local/openresty/lua/ # Copy the Lua scripts to the container
@@ -16,37 +19,64 @@ services:
   
   redis:
     image: "redis:latest"
+    profiles: ["control"]
     ports:
     - "6379:6379"
     networks:
     - synaptic-network
-  
-  worker:
-    build: ./working-nodes  #build the Dockerfile inside the working-nodes folder
+
+  worker-1:
+      build: ./working-nodes
+      profiles: ["compute"]
+      ports: 
+        - "5000:5000"
+      deploy:
+        resources:
+          reservations:
+            devices:
+              - driver: nvidia
+                count: 1
+                capabilities: [gpu]
+      networks:
+        - synaptic-network
+
+  worker-2:
+      build: ./working-nodes
+      profiles: ["compute"]
+      ports: 
+        - "5001:5000"
+      deploy:
+        resources:
+          reservations:
+            devices:
+              - driver: nvidia
+                count: 1
+                capabilities: [gpu]
+      networks:
+        - synaptic-network
+
+  worker-3:
+      build: ./working-nodes
+      profiles: ["compute"]
+      ports: 
+        - "5002:5000"
+      deploy:
+        resources:
+          reservations:
+            devices:
+              - driver: nvidia
+                count: 1
+                capabilities: [gpu]
+      networks:
+        - synaptic-network
+
+  watchdog:
+    build: ./watchdog  #build the Dockerfile inside the gateway/watchdog folder
+    profiles: ["control"]
     environment:
       - REDIS_HOST=redis     # Tell Python where to find the database
-      - OLLAMA_HOST=ollama   # Tell Python where to find the AI model
     depends_on:
       - redis
-      #- ollama  
-    networks:
-      - synaptic-network
-    
-  worker-2:
-    build: ./working-nodes
-    environment:
-      - REDIS_HOST=redis
-      - OLLAMA_HOST=ollama
-    depends_on:
-      - redis
-      #- ollama
-    networks:
-      - synaptic-network
-
-  ollama:
-    image: "ollama/ollama:latest"
-    volumes: 
-      - ./ollama_data:/root/.ollama # Save models here so they don't delete on restart
     networks:
       - synaptic-network
 
