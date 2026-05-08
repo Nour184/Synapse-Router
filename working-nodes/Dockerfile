@@ -8,11 +8,12 @@ RUN apt-get update && apt-get install -y \
 	python3-pip \
 	python3.10-dev \
 	git \
-	&& rm -rf /var/lib/apt/list/*
+	ninja-build \
+	&& rm -rf /var/lib/apt/lists/*
 
 # Link python and pip 3 terminal commands to just python and pip
-RUN ln -s /usr/bin/python3.10 /usr/bin/python
-RUN ln -s /usr/bin/pip3 /usr/bin/pip
+RUN ln -sf /usr/bin/pip3 /usr/bin/pip
+RUN ln -sf /usr/bin/python3.10 /usr/bin/python
 
 WORKDIR /WorkerNode
 
@@ -24,6 +25,9 @@ ENV CMAKE_ARGS="-DGGML_CUDA=on"
 ENV FORCE_CMAKE=1
 
 RUN pip install --no-cache-dir -r required_libraries.txt
+
+ARG HF_TOKEN
+ENV HF_TOKEN=$HF_TOKEN
 
 COPY . .
 

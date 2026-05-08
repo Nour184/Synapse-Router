@@ -6,7 +6,7 @@ class LlamaEngine:
         # This call blocks the thread until the entire model is loaded in memory
         self.llm = Llama(
                 model_path = model_path,
-                n-gpu-layers=-1,
+                n_gpu_layers=-1,
                 n_ctx = 2048, # 2MB,
                 n_threads = 4,
                 verbose = False

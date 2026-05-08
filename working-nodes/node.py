@@ -4,10 +4,34 @@ import socket
 import uvicorn
 import time
 from llm import llm_instance
+import logging
 
 app = FastAPI()
 
-print("WORKER STARTING UP...")
+LOGGING_CONFIG = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "default": {
+            "()": "uvicorn.logging.DefaultFormatter",
+            "fmt": "%(levelprefix)s %(asctime)s | %(message)s",
+            "datefmt": "%Y-%m-%d %H:%M:%S",
+        },
+    },
+    "handlers": {
+        "default": {
+            "formatter": "default",
+            "class": "logging.StreamHandler",
+            "stream": "ext://sys.stdout",  # Forces output to stdout so Docker catches it
+        },
+    },
+    "loggers": {
+        "uvicorn": {"handlers": ["default"], "level": "INFO"},
+        "uvicorn.error": {"level": "INFO"},
+        "uvicorn.access": {"handlers": ["default"], "level": "INFO", "propagate": False},
+    },
+} 
+
 
 # By adding {full_path:path}, this will catch /api/, /api/generate, /api/chat, etc.
 @app.api_route("/api/{full_path:path}", methods=["GET", "POST"])
@@ -41,4 +65,5 @@ async def catch_all(request: Request, full_path: str = ""):
 
 if __name__ == "__main__":
     # Ensure it binds to 0.0.0.0 so Nginx can reach it from outside the container
-    uvicorn.run(app, host="0.0.0.0", port=5000)
+    uvicorn.run(app, host="0.0.0.0", port=5000, log_config=LOGGING_CONFIG)
+
