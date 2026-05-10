@@ -24,6 +24,18 @@ services:
     - "6379:6379"
     networks:
     - synaptic-network
+  
+  admin-dashboard:
+    build: ./admin
+    profiles: ["control"]
+    ports:
+      - "8501:8501"
+    depends_on:
+      - redis
+      - gateway
+    networks:
+      - synaptic-network
+
 
   worker-1:
       build:
