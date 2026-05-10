@@ -1,18 +1,18 @@
 local balancer = require "ngx.balancer"
 local state = ngx.shared.router_state
 
--- local worker_nodes = {  
---     { name = "worker-1", ip = "100.x.x.x", port = 5000 }, 
---     { name = "worker-2", ip = "100.x.x.x", port = 5001 },
---     { name = "worker-3", ip = "100.x.x.x", port = 5002 }
--- }
-
---just for testing on my machine now
 local worker_nodes = {  
-    { name = "local-worker-1", ip = "172.19.208.1", port = 5000 }, 
-    { name = "local-worker-2", ip = "172.19.208.1", port = 5001 },
-    { name = "local-worker-3", ip = "172.19.208.1", port = 5002 }
+    { name = "worker-1", ip = "100.127.81.29", port = 5000 }, 
+    { name = "worker-2", ip = "100.127.81.29", port = 5001 },
+    { name = "worker-3", ip = "100.127.81.29", port = 5002 }
 }
+
+-- --just for testing on my machine now
+-- local worker_nodes = {  
+--     { name = "local-worker-1", ip = "172.19.208.1", port = 5000 }, 
+--     { name = "local-worker-2", ip = "172.19.208.1", port = 5001 },
+--     { name = "local-worker-3", ip = "172.19.208.1", port = 5002 }
+-- }
 
 local req_id = ngx.req.get_headers()["x-request-id"]
 
