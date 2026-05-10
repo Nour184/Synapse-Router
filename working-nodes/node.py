@@ -17,7 +17,7 @@ async def catch_all(request: Request, full_path: str = ""):
     worker_name = socket.gethostname()
     
     # 3. Simulate a 1-second delay for "inference"
-    await asyncio.sleep(40)
+    await asyncio.sleep(5)
     
     # 4. Return the response back to Nginx
     return {
