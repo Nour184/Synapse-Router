@@ -31,6 +31,8 @@ services:
         args:
           - HF_TOKEN=${HF_TOKEN}
       profiles: ["compute"]
+      environment:
+        - PINECONE_API_KEY=${PC_TOKEN}
       ports: 
         - "5000:5000"
       deploy:
@@ -49,6 +51,8 @@ services:
         args:
           - HF_TOKEN=${HF_TOKEN}
       profiles: ["compute"]
+      environment:
+        - PINECONE_API_KEY=${PC_TOKEN} 
       ports: 
         - "5001:5000"
       deploy:
@@ -67,6 +71,8 @@ services:
         args:
           - HF_TOKEN=${HF_TOKEN}
       profiles: ["compute"]
+      environment:
+        - PINECONE_API_KEY=${PC_TOKEN} 
       ports: 
         - "5002:5000"
       deploy:
@@ -92,4 +98,4 @@ services:
 
 networks:
   synaptic-network:
-    driver: bridge     # Creates a private virtual Wi-Fi for containers
+    driver: bridge     # Creates a private virtual Wi-Fi for containersiners

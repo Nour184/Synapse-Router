@@ -24,7 +24,8 @@ COPY required_libraries.txt .
 ENV CMAKE_ARGS="-DGGML_CUDA=on"
 ENV FORCE_CMAKE=1
 
-RUN pip install --no-cache-dir -r required_libraries.txt
+RUN pip install torch --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --default-timeout=1000 --no-cache-dir -r required_libraries.txt
 
 ARG HF_TOKEN
 ENV HF_TOKEN=$HF_TOKEN
@@ -33,6 +34,6 @@ COPY . .
 
 RUN chmod +x *.sh
 
-RUN ./download_model.sh
+# RUN ./download_model.sh # ENABLE IF YOU DON't have the model in ./models
 
 CMD ["uvicorn", "node:app", "--host", "0.0.0.0", "--port", "5000"]
