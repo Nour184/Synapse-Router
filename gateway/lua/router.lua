@@ -24,9 +24,9 @@ end
 
 -- 1. IF THIS IS A RETRY: Ban the node that just dropped the connection
 local state_name = balancer.get_last_failure()
-if state_name == "failed" and ngx.ctx.last_node then
-    ngx.log(ngx.ERR, "TCP connection failed on " .. ngx.ctx.last_node .. ". Banning for 5 mins.")
-    state:set("banned_" .. ngx.ctx.last_node, true, 300) 
+if state_name and state_name ~= "" and ngx.ctx.last_node then
+    ngx.log(ngx.ERR, "Upstream failure (" .. state_name .. ") on " .. ngx.ctx.last_node .. ". Banning for 5 mins.")
+    state:set("banned_" .. ngx.ctx.last_node, true, 30) --ban for 30secs instead of 5 mins
 end
 
 -- 2. FILTER OUT BANNED NODES

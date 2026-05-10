@@ -3,13 +3,52 @@ import requests
 import pandas as pd
 import numpy as np
 import time
+import json
+import redis
+
+@st.cache_resource
+def get_redis_client():
+    return redis.Redis(host='redis', port=6379, db=0, decode_responses=True)
+
+r = get_redis_client()
+def get_watchdog_state():
+    try:
+        # Ask the Nginx gateway container for the watchdog state
+        response = requests.get("http://gateway:80/watchdog/state", timeout=2)
+        return response.json()
+    except Exception as e:
+        return {"banned": {}, "tracking": {}}
+
+# ===================================
+#   SESSION STATE 
+# ===================================
+if 'total_sent' not in st.session_state:
+    st.session_state.total_sent = 0
+if 'total_received' not in st.session_state:
+    st.session_state.total_received = 0
+if 'known_active_requests' not in st.session_state:
+    st.session_state.known_active_requests = set()
+
+# Fetch the live requests from Redis early so we can do the math
+live_requests = r.hgetall("requests:payloads")
+current_active_set = set(live_requests.keys())
+
+# Calculate the differences since the last 2-second refresh
+new_requests = current_active_set - st.session_state.known_active_requests
+completed_requests = st.session_state.known_active_requests - current_active_set
+
+# Increment the counters
+st.session_state.total_sent += len(new_requests)
+st.session_state.total_received += len(completed_requests)
+
+# Save the current state for the NEXT loop
+st.session_state.known_active_requests = current_active_set
 
 
-# 1. Page Configuration (Must be the first Streamlit command)
-# This forces the dashboard to use the full width of the screen and sets a dark theme vibe
+# Page Configuration
 st.set_page_config(page_title="Synapse Router Admin", layout="wide", initial_sidebar_state="collapsed")
 
-# Custom CSS to inject some of that purple aesthetic from your reference image
+# Custom CSS
 st.markdown("""
     <style>
     /* --- COMPRESSION FIXES --- */
@@ -60,17 +99,21 @@ st.markdown("""
         padding: 5px;
     }
             
-    /* --- NODE STATUS: SERVER RACK STYLE --- */
+   /* --- NODE STATUS: SERVER RACK STYLE --- */
     .sr-rack-container {
         display: flex;
         flex-direction: column;
-        gap: 12px;
-        padding-top: 5px;
-        max-height: 200px; /* Forces the box to stop growing and scroll instead */
-        overflow-y: auto;  /* Turns on the vertical scrollbar */
-        padding-right: 5px; /* Gives the scrollbar room to breathe */
-        margin-bottom: -10px;
+        
+        /* THE FIX: Make the HTML act as the outer box! */
+        background-color: #0e1117; 
+        border: 1px solid #2d333b; 
+        border-radius: 12px;       
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3); 
+        
+        max-height: 250px; 
+        overflow-y: auto;  
     }
+    
     /* Custom sleek scrollbar for dark mode */
     .sr-rack-container::-webkit-scrollbar {
         width: 6px;
@@ -79,13 +122,15 @@ st.markdown("""
         background-color: #2d333b;
         border-radius: 4px;
     }
+    
     .sr-rack-slot {
         display: flex;
         justify-content: space-between;
         align-items: center;
         border-left: 4px solid #3fb950; /* Green bar on the left */
-        padding: 8px 12px;
-        background: #0e1117;
+        padding: 12px 16px; /* Flushed padding */
+        
+        /* Removed the background color here so it inherits from the container! */
         border-bottom: 1px solid #1f242b;
     }
     .sr-rack-slot:last-child {
@@ -107,6 +152,21 @@ st.markdown("""
     }
     .badge-good { background: rgba(63, 185, 80, 0.1); color: #3fb950; border: 1px solid rgba(63, 185, 80, 0.3); }
     .badge-bad { background: rgba(248, 81, 73, 0.1); color: #f85149; border: 1px solid rgba(248, 81, 73, 0.3); }
+    
+    /* --- LIVE PAYLOAD FEED SCROLLBAR --- */
+    div[data-testid="stCodeBlock"] {
+        max-height: 200px; /* Locks the height to match the Failure Simulation box */
+        overflow-y: auto;  /* Turns on the vertical scrollbar when text overflows */
+    }
+
+    /* Apply the custom dark scrollbar to the code block */
+    div[data-testid="stCodeBlock"]::-webkit-scrollbar {
+        width: 6px;
+    }
+    div[data-testid="stCodeBlock"]::-webkit-scrollbar-thumb {
+        background-color: #2d333b;
+        border-radius: 4px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -114,17 +174,17 @@ st.title("Synapse Router | Admin Dashboard")
 st.markdown("---")
 
 # ==========================================
-# ROW 1: THE HIGH-LEVEL METRICS (KPIs)
+# THE HIGH-LEVEL METRICS 
 # ==========================================
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     with st.container(border=True):
-        st.metric(label="Total Requests Sent", value="1,245")
+        st.metric(label="Total Requests Sent", value=f"{st.session_state.total_sent:,}")
 
 with col2:
     with st.container(border=True):
-        st.metric(label="Total Requests Received", value="1,240")
+        st.metric(label="Total Requests Received", value=f"{st.session_state.total_received:,}")
 
 with col3:
     with st.container(border=True):
@@ -135,9 +195,8 @@ with col4:
         st.metric(label="Average Latency", value="1.2s", delta_color="inverse")
 
 
-
 # ==========================================
-# ROW 2: GRAPH & STATUS
+#  GRAPH & STATUS
 # ==========================================
 graph_col, status_col = st.columns([3, 1]) # 3-to-1 width ratio
 
@@ -152,27 +211,29 @@ with graph_col:
 
 with status_col:
     st.subheader("Node Status")
-    with st.container(border=True):
-        st.markdown("""
-        <div class="sr-rack-container">
-            <div class="sr-rack-slot">
-                <span class="sr-rack-name">node-01</span>
-                <span class="sr-badge badge-good">ACTIVE</span>
-            </div>
-            <div class="sr-rack-slot banned-slot">
-                <span class="sr-rack-name">node-02</span>
-                <span class="sr-badge badge-bad">TIMEOUT</span>
-            </div>
-            <div class="sr-rack-slot">
-                <span class="sr-rack-name">node-03</span>
-                <span class="sr-badge badge-good">ACTIVE</span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+    
+    # Get the real data from Watchdog
+    watchdog_data = get_watchdog_state()
+    banned_nodes = watchdog_data.get("banned", {})
+    
+    # Define our actual worker nodes
+    all_nodes = ["worker-1", "worker-2", "worker-3"] ### made them static for now as we only made 3 worker containers
+    
+    # Build the HTML dynamically
+    html_content = '<div class="sr-rack-container">'
+    for node in all_nodes:
+        if f"banned_{node}" in banned_nodes or node in banned_nodes:
+            html_content += f'<div class="sr-rack-slot banned-slot"><span class="sr-rack-name">{node}</span><span class="sr-badge badge-bad">BANNED</span></div>'
+        else:
+            html_content += f'<div class="sr-rack-slot"><span class="sr-rack-name">{node}</span><span class="sr-badge badge-good">ACTIVE</span></div>'
+    html_content += '</div>'
+
+    # Render directly in the column, NO st.container()
+    st.markdown(html_content, unsafe_allow_html=True)
 #st.markdown("---")
 
 # ==========================================
-# ROW 3: CONTROL & LIVE FEED
+#  CONTROL & LIVE FEED
 # ==========================================
 control_col, feed_col = st.columns([1, 2])
 
@@ -181,19 +242,44 @@ with control_col:
     st.write("Force a node to crash to test the load balancer recovery.")
     
     # Enhancement: Dropdown instead of text input prevents user errors!
-    target_node = st.selectbox("Select Node to Crash:", ["local-worker-1", "local-worker-2", "local-worker-3"])
+    target_node = st.selectbox("Select Node to Crash:", ["worker-1", "worker-2", "worker-3"])
     
     if st.button("⚠️ Simulate Crash", type="primary"):
-        st.toast(f"Crash signal sent to {target_node}!", icon="💥")
-        # Later: We will add the requests.post() here to hit Nginx
-
+        try:
+            # The watchdog will then see this and execute the physical TCP kill!
+            response = requests.post("http://gateway:80/watchdog/control", data={"ban_node": target_node})
+            if response.status_code == 200:
+                st.toast(f"Crash signal sent to {target_node}! Watchdog will sever connections.", icon="💥")
+            else:
+                st.error(f"Failed to send crash signal: {response.text}")
+        except Exception as e:
+            st.error(f"Error communicating with Gateway: {e}")
 with feed_col:
-    st.subheader("Live Payload Feed")
-    # Mock live feed area
+    st.subheader("📡 Live Payload Feed")
+    
+    # Read the actual hash we created in Nginx's access.lua
+    live_requests = r.hgetall("requests:payloads")
+    
+    feed_text = ""
+    if not live_requests:
+        feed_text = "> Waiting for incoming traffic...\n> Redis 'requests:payloads' is currently empty."
+    else:
+        # Loop through whatever is sitting in Redis right now
+        for req_id, payload in live_requests.items():
+            # Get the assigned node from the tracking list if it exists
+            watchdog_data = get_watchdog_state()
+            assigned_node = watchdog_data.get("tracking", {}).get(f"tracking_{req_id}", "Assigning...")
+            
+            feed_text += f"[{time.strftime('%H:%M:%S')}] {req_id} -> {assigned_node}\n"
+
+    # Render it inside the code block
     feed_placeholder = st.empty()
     with feed_placeholder.container():
-        st.code("""
-[2026-05-10 17:15:22] req-1777645486-8147 -> Routed to Node 1
-[2026-05-10 17:15:23] req-1777645491-6310 -> Routed to Node 3
-[2026-05-10 17:15:25] req-1777645487-7289 -> Processing...
-        """, language="bash")
+        st.code(feed_text, language="bash")
+
+
+# ==========================================
+# AUTO REFRESH LOOP
+# ==========================================
+time.sleep(1)  # Wait 2 seconds
+st.rerun()     # Tell Streamlit to automatically reload the page with fresh data!

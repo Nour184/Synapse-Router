@@ -12,31 +12,21 @@ NGINX_API_URL = "http://gateway:80/api/"
 
 TIMEOUT_SECONDS = 310 #10 secs longer than nginx timeout 
 
-def recover_request(req_id):
-    """Helper function to pull from Redis, requeue, and clean up."""
-    payload = redis_client.hget("requests:payloads", req_id)
-    if payload:
-        try:
-            # FIRE AND FORGET: 0.5s timeout. It will send the data to Nginx, 
-            # then instantly raise a ReadTimeout so the Watchdog can keep looping.
-            requests.post(NGINX_API_URL, data=payload, headers={'Content-Type': 'application/json'}, timeout=0.5)
-        except requests.exceptions.ReadTimeout:
-            # This is expected behavior. The payload was sent successfully.
-            pass
-        except Exception as e:
-            print(f"Failed to requeue {req_id}: {e}")
-        
-        # Tell Nginx to stop tracking it, then delete from Redis
-        requests.post(NGINX_CONTROL_URL, data={"clear_req": req_id})
-        redis_client.hdel("requests:payloads", req_id)
-        return True
-    return False
+# Mapping of node names to their specific Tailscale ports
+NODE_PORTS = {
+    "worker-1": 5000,
+    "worker-2": 5001,
+    "worker-3": 5002
+}
+
+# Manual recover_request is no longer needed! Nginx will natively retry 
+# when we force-close the TCP connections using iptables.
 
 def run_watchdog():
     print("Starting Watchdog with Bulk Recovery & 3-Strike Circuit Breaker...")
     
     node_strikes = {}      
-    handled_timeouts = set() 
+    banned_history = set() 
 
     while True:
         try:
@@ -49,20 +39,30 @@ def run_watchdog():
             banned_nodes = state_data.get("banned", [])
             current_time = int(time.time())
             
-            # MEMORY LEAK FIX: Remove old req_ids that are no longer active in Nginx
-            handled_timeouts = {req for req in handled_timeouts if req in active_requests}
+            # Clean up history for nodes whose ban has expired
+            banned_history = {node for node in banned_history if node in banned_nodes}
             
-            # 1. BULK RECOVERY: Instantly evacuate all requests on banned nodes
-            for req_id, node_name in list(active_requests.items()):
-                if node_name in banned_nodes and req_id not in handled_timeouts:
-                    print(f"[BULK RECOVERY] {node_name} is banned! Instantly recovering {req_id}...")
-                    if recover_request(req_id):
-                        handled_timeouts.add(req_id)
-                    del active_requests[req_id]
+            # 1. BULK RECOVERY VIA TCP KILL
+            for node_name in banned_nodes:
+                if node_name not in banned_history:
+                    print(f"[TCP KILL] {node_name} was banned! Force-closing all active Nginx connections...")
+                    
+                    port = NODE_PORTS.get(node_name)
+                    if port:
+                        # Instantly close active connections by dropping packets to the node's specific port
+                        os.system(f"docker exec synapse-gateway iptables -A OUTPUT -p tcp --dport {port} -j REJECT --reject-with tcp-reset")
+                        
+                        # KEEP the block active for 35 seconds! (Longer than Nginx's 30s timeout)
+                        # This guarantees any delayed response from the node is blocked.
+                        os.system(f"(sleep 35 && docker exec synapse-gateway iptables -D OUTPUT -p tcp --dport {port} -j REJECT --reject-with tcp-reset) &")
+                    else:
+                        print(f"[ERROR] No port mapping found for {node_name}!")
+                    
+                    banned_history.add(node_name)
 
             # 2. TIMEOUT DETECTION: Check remaining active requests on healthy nodes
             for req_id, node_name in active_requests.items():
-                if req_id in handled_timeouts:
+                if node_name in banned_nodes:
                     continue 
                     
                 try:
@@ -74,21 +74,19 @@ def run_watchdog():
                     print(f"[TIMEOUT] {req_id} stuck on {node_name}!")
                     
                     node_strikes[node_name] = node_strikes.get(node_name, 0) + 1
-                    handled_timeouts.add(req_id)
                     
                     # Check for 3 Strikes
                     if node_strikes[node_name] >= 3:
                         print(f"[CIRCUIT BREAKER] {node_name} hit 3 strikes. Banning via API!")
+                        # This tells Nginx to ban the node. On the NEXT loop iteration (1 sec later),
+                        # the TCP KILL block above will catch it and execute the iptables rule!
                         requests.post(NGINX_CONTROL_URL, data={"ban_node": node_name})
                         node_strikes[node_name] = 0 
-                    
-                    print(f"[RECOVERY] Re-queueing {req_id} back to Gateway...")
-                    recover_request(req_id)
 
         except Exception as e:
             print(f"[ERROR] Watchdog issue: {e}")
             
-        time.sleep(5)
+        time.sleep(1)
 
 if __name__ == "__main__":
     run_watchdog()
