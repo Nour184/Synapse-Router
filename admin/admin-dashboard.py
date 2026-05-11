@@ -17,7 +17,7 @@ def get_watchdog_state():
         response = requests.get("http://gateway:80/watchdog/state", timeout=2)
         return response.json()
     except Exception as e:
-        return {"banned": {}, "tracking": {}}
+        return {"banned": {}, "tracking": {}, "metrics": {}}
 
 # ===================================
 #   SESSION STATE 
@@ -104,7 +104,7 @@ st.markdown("""
         display: flex;
         flex-direction: column;
         
-        /* THE FIX: Make the HTML act as the outer box! */
+        /*Make the HTML act as the outer box! */
         background-color: #0e1117; 
         border: 1px solid #2d333b; 
         border-radius: 12px;       
@@ -173,6 +173,19 @@ st.markdown("""
 st.title("Synapse Router | Admin Dashboard")
 st.markdown("---")
 
+# Fetch the real data from Watchdog
+watchdog_data = get_watchdog_state()
+metrics = watchdog_data.get("metrics", {})
+
+# Calculate real-time stats
+real_total_completed = metrics.get("total_requests_completed", 0)
+total_latency = metrics.get("total_latency", 0)
+uptime = metrics.get("uptime", 1)
+
+# Averages
+avg_latency = (total_latency / real_total_completed) if real_total_completed > 0 else 0
+avg_throughput = real_total_completed / uptime
+
 # ==========================================
 # THE HIGH-LEVEL METRICS 
 # ==========================================
@@ -184,15 +197,16 @@ with col1:
 
 with col2:
     with st.container(border=True):
-        st.metric(label="Total Requests Received", value=f"{st.session_state.total_received:,}")
+        # We can use the real completed count directly from Nginx!
+        st.metric(label="Total Requests Completed", value=f"{real_total_completed:,}")
 
 with col3:
     with st.container(border=True):
-        st.metric(label="Average Throughput", value="45 req/sec")
+        st.metric(label="Average Throughput", value=f"{avg_throughput:.2f} req/s")
 
 with col4:
     with st.container(border=True):
-        st.metric(label="Average Latency", value="1.2s", delta_color="inverse")
+        st.metric(label="Average Latency", value=f"{avg_latency:.2f}s", delta_color="inverse")
 
 
 # ==========================================
@@ -212,8 +226,7 @@ with graph_col:
 with status_col:
     st.subheader("Node Status")
     
-    # Get the real data from Watchdog
-    watchdog_data = get_watchdog_state()
+    # We already fetched watchdog_data above
     banned_nodes = watchdog_data.get("banned", {})
     
     # Define our actual worker nodes

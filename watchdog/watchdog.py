@@ -10,7 +10,7 @@ NGINX_STATE_URL = "http://gateway:80/watchdog/state"
 NGINX_CONTROL_URL = "http://gateway:80/watchdog/control"
 NGINX_API_URL = "http://gateway:80/api/"
 
-TIMEOUT_SECONDS = 310 #10 secs longer than nginx timeout 
+TIMEOUT_SECONDS = 5 #10 secs longer than nginx timeout 
 
 # Mapping of node names to their specific Tailscale ports
 NODE_PORTS = {
@@ -23,9 +23,8 @@ NODE_PORTS = {
 # when we force-close the TCP connections using iptables.
 
 def run_watchdog():
-    print("Starting Watchdog with Bulk Recovery & 3-Strike Circuit Breaker...")
+    print("Starting Watchdog with Bulk Recovery & Instant Circuit Breaker...")
     
-    node_strikes = {}      
     banned_history = set() 
 
     while True:
@@ -51,10 +50,7 @@ def run_watchdog():
                     if port:
                         # Instantly close active connections by dropping packets to the node's specific port
                         os.system(f"docker exec synapse-gateway iptables -A OUTPUT -p tcp --dport {port} -j REJECT --reject-with tcp-reset")
-                        
-                        # KEEP the block active for 35 seconds! (Longer than Nginx's 30s timeout)
-                        # This guarantees any delayed response from the node is blocked.
-                        os.system(f"(sleep 35 && docker exec synapse-gateway iptables -D OUTPUT -p tcp --dport {port} -j REJECT --reject-with tcp-reset) &")
+                        # The block is now PERMANENT until the node passes the health check!
                     else:
                         print(f"[ERROR] No port mapping found for {node_name}!")
                     
@@ -71,17 +67,51 @@ def run_watchdog():
                     continue
 
                 if (current_time - req_timestamp) > TIMEOUT_SECONDS:
-                    print(f"[TIMEOUT] {req_id} stuck on {node_name}!")
+                    # The request is taking longer than TIMEOUT_SECONDS. Let's actively check if the node is alive!
+                    port = NODE_PORTS.get(node_name)
+                    if not port:
+                        continue
+                        
+                    health_url = f"http://100.127.81.29:{port}/api/health" # Using the Tailscale IP
                     
-                    node_strikes[node_name] = node_strikes.get(node_name, 0) + 1
-                    
-                    # Check for 3 Strikes
-                    if node_strikes[node_name] >= 3:
-                        print(f"[CIRCUIT BREAKER] {node_name} hit 3 strikes. Banning via API!")
-                        # This tells Nginx to ban the node. On the NEXT loop iteration (1 sec later),
-                        # the TCP KILL block above will catch it and execute the iptables rule!
+                    try:
+                        # Ping the health endpoint with a strict 2-second timeout
+                        health_resp = requests.get(health_url, timeout=5)
+                        
+                        if health_resp.status_code == 200:
+                            pass 
+                        else:
+                            raise Exception("Health check returned bad status")
+                            
+                    except requests.exceptions.RequestException:
+                        # Scenario B: Node is DEAD or FROZEN!
+                        print(f"[CIRCUIT BREAKER] {node_name} failed health check! Banning instantly!")
                         requests.post(NGINX_CONTROL_URL, data={"ban_node": node_name})
-                        node_strikes[node_name] = 0 
+
+            # 3. PROACTIVE RECOVERY: Ping banned nodes to see if they woke up
+            for node_name in banned_nodes:
+                port = NODE_PORTS.get(node_name)
+                if not port:
+                    continue
+                
+                health_url = f"http://100.127.81.29:{port}/api/health"
+                try:
+                    resp = requests.get(health_url, timeout=2)
+                    if resp.status_code == 200:
+                        print(f"[RECOVERY] {node_name} is back online! Unbanning.")
+                        
+                        # Tell Nginx to unban the node
+                        requests.post(NGINX_CONTROL_URL, data={"unban_node": node_name})
+                        
+                        # Remove the physical iptables block
+                        os.system(f"docker exec synapse-gateway iptables -D OUTPUT -p tcp --dport {port} -j REJECT --reject-with tcp-reset")
+                        
+                        # Remove from history so it can be banned again if it dies
+                        if node_name in banned_history:
+                            banned_history.remove(node_name)
+                            
+                except requests.exceptions.RequestException:
+                    pass # Node is still dead, keep it banned!
 
         except Exception as e:
             print(f"[ERROR] Watchdog issue: {e}")
