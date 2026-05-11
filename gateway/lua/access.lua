@@ -5,5 +5,8 @@ local req_id = "req-"..tostring(ngx.time()).."-"..math.random(1000,9999)
 ngx.req.set_header("x-request-id", req_id)
 ngx.ctx.req_id = req_id
 
+local state = ngx.shared.router_state
+state:incr("total_requests_sent", 1, 0)
+
 -- We no longer save the request body to Redis here! 
 -- Nginx handles retries natively via proxy_next_upstream by buffering the request in memory.

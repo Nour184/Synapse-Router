@@ -19,6 +19,33 @@ def get_watchdog_state():
     except Exception as e:
         return {"banned": {}, "tracking": {}, "metrics": {}}
 
+WORKER_METRICS_URLS = {
+    "worker-1": "http://100.127.81.29:5000/api/metrics",
+    "worker-2": "http://100.127.81.29:5001/api/metrics",
+    "worker-3": "http://100.127.81.29:5002/api/metrics"
+}
+
+def get_worker_metrics():
+    all_data = []
+    for node_name, url in WORKER_METRICS_URLS.items():
+        try:
+            resp = requests.get(url, timeout=1)
+            if resp.status_code == 200:
+                data = resp.json()
+                if "history" in data:
+                    all_data.extend(data["history"])
+        except Exception:
+            pass
+    
+    if not all_data:
+        return pd.DataFrame(columns=['worker-1', 'worker-2', 'worker-3'])
+        
+    df = pd.DataFrame(all_data)
+    if 'time' in df.columns and 'Node' in df.columns and 'utilization' in df.columns:
+        # Pivot so 'time' is X-axis, Nodes are columns, and utilization are values
+        df = df.pivot(index='time', columns='Node', values='utilization').fillna(0)
+    return df
+
 # ===================================
 #   SESSION STATE 
 # ===================================
@@ -179,6 +206,7 @@ metrics = watchdog_data.get("metrics", {})
 
 # Calculate real-time stats
 real_total_completed = metrics.get("total_requests_completed", 0)
+real_total_sent = metrics.get("total_requests_sent", 0)
 total_latency = metrics.get("total_latency", 0)
 uptime = metrics.get("uptime", 1)
 
@@ -193,7 +221,7 @@ col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     with st.container(border=True):
-        st.metric(label="Total Requests Sent", value=f"{st.session_state.total_sent:,}")
+        st.metric(label="Total Requests Sent", value=f"{real_total_sent:,}")
 
 with col2:
     with st.container(border=True):
@@ -216,11 +244,7 @@ graph_col, status_col = st.columns([3, 1]) # 3-to-1 width ratio
 
 with graph_col:
     st.subheader("GPU & CPU Utilization")
-    # Mock data for the line chart (We will replace this with real data later)
-    chart_data = pd.DataFrame(
-        np.random.randn(20, 3) * 10 + 50,
-        columns=['Worker 1 (GPU)', 'Worker 2 (GPU)', 'Worker 3 (GPU)']
-    )
+    chart_data = get_worker_metrics()
     st.line_chart(chart_data, height=250)
 
 with status_col:
