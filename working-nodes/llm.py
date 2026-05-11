@@ -14,8 +14,8 @@ class LlamaEngine:
 
     def generate(self, user_prompt: str) -> str:
         # Llama 3.x strictly requires this specific prompt formatting structure to work
-        formatted_prompt = (
-            "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n"
+        formatted_prompt = ( # Note removed <|head_of_text|> as the engine injects it already 
+            "<|start_header_id|>user<|end_header_id|>\n\n"
             f"{user_prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
         )
 

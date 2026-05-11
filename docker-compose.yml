@@ -26,6 +26,7 @@ services:
     - synaptic-network
 
   worker-1:
+      pid: "host"
       build:
         context: ./working-nodes
         args:
@@ -33,6 +34,8 @@ services:
       profiles: ["compute"]
       environment:
         - PINECONE_API_KEY=${PC_TOKEN}
+        - SERVICE_NAME=worker-1
+        - PYTHONUNBUFFERED=1
       ports: 
         - "5000:5000"
       deploy:
@@ -41,11 +44,12 @@ services:
             devices:
               - driver: nvidia
                 count: 1
-                capabilities: [gpu]
+                capabilities: [gpu, utility]
       networks:
         - synaptic-network
 
   worker-2:
+      pid: "host"
       build: 
         context: ./working-nodes
         args:
@@ -53,6 +57,8 @@ services:
       profiles: ["compute"]
       environment:
         - PINECONE_API_KEY=${PC_TOKEN} 
+        - SERVICE_NAME=worker-2
+        - PYTHONUNBUFFERED=1
       ports: 
         - "5001:5000"
       deploy:
@@ -61,11 +67,12 @@ services:
             devices:
               - driver: nvidia
                 count: 1
-                capabilities: [gpu]
+                capabilities: [gpu, utility]
       networks:
         - synaptic-network
 
   worker-3:
+      pid: "host"
       build: 
         context: ./working-nodes
         args:
@@ -73,6 +80,8 @@ services:
       profiles: ["compute"]
       environment:
         - PINECONE_API_KEY=${PC_TOKEN} 
+        - SERVICE_NAME=worker-3
+        - PYTHONUNBUFFERED=1
       ports: 
         - "5002:5000"
       deploy:
@@ -81,7 +90,7 @@ services:
             devices:
               - driver: nvidia
                 count: 1
-                capabilities: [gpu]
+                capabilities: [gpu, utility]
       networks:
         - synaptic-network
 

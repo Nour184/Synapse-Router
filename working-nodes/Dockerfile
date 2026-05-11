@@ -36,4 +36,4 @@ RUN chmod +x *.sh
 
 # RUN ./download_model.sh # ENABLE IF YOU DON't have the model in ./models
 
-CMD ["uvicorn", "node:app", "--host", "0.0.0.0", "--port", "5000"]
+CMD ["python", "node.py"]
