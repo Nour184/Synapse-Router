@@ -1,11 +1,6 @@
 import os
 import requests
-import redis
 import time
-
-REDIS_HOST = os.environ.get("REDIS_HOST", "redis")
-redis_client = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
-
 NGINX_STATE_URL = "http://gateway:80/watchdog/state"
 NGINX_CONTROL_URL = "http://gateway:80/watchdog/control"
 NGINX_API_URL = "http://gateway:80/api/"
@@ -41,20 +36,9 @@ def run_watchdog():
             # Clean up history for nodes whose ban has expired
             banned_history = {node for node in banned_history if node in banned_nodes}
             
-            # 1. BULK RECOVERY VIA TCP KILL
-            for node_name in banned_nodes:
-                if node_name not in banned_history:
-                    print(f"[TCP KILL] {node_name} was banned! Force-closing all active Nginx connections...")
-                    
-                    port = NODE_PORTS.get(node_name)
-                    if port:
-                        # Instantly close active connections by dropping packets to the node's specific port
-                        os.system(f"docker exec synapse-gateway iptables -A OUTPUT -p tcp --dport {port} -j REJECT --reject-with tcp-reset")
-                        # The block is now PERMANENT until the node passes the health check!
-                    else:
-                        print(f"[ERROR] No port mapping found for {node_name}!")
-                    
-                    banned_history.add(node_name)
+            # 1. BULK RECOVERY VIA TCP KILL IS REMOVED
+            # Nginx will patiently wait for the AI prompt to finish computing. 
+            # We just use the Banned list to prevent NEW requests from being routed to busy/dead nodes!
 
             # 2. TIMEOUT DETECTION: Check remaining active requests on healthy nodes
             for req_id, node_name in active_requests.items():
@@ -75,18 +59,17 @@ def run_watchdog():
                     health_url = f"http://100.127.81.29:{port}/api/health" # Using the Tailscale IP
                     
                     try:
-                        # Ping the health endpoint with a strict 2-second timeout
+                        # Ping the health endpoint with a strict timeout
                         health_resp = requests.get(health_url, timeout=5)
                         
-                        if health_resp.status_code == 200:
-                            pass 
-                        else:
-                            raise Exception("Health check returned bad status")
-                            
+                        # If it returns a 500 error, raise an HTTPError (which is a RequestException)
+                        health_resp.raise_for_status()
+                        
                     except requests.exceptions.RequestException:
-                        # Scenario B: Node is DEAD or FROZEN!
+                        # Scenario B: Node is DEAD, FROZEN, or returned a 500 error!
                         print(f"[CIRCUIT BREAKER] {node_name} failed health check! Banning instantly!")
                         requests.post(NGINX_CONTROL_URL, data={"ban_node": node_name})
+                        banned_nodes.append(node_name) # Prevent pinging it again in this loop!
 
             # 3. PROACTIVE RECOVERY: Ping banned nodes to see if they woke up
             for node_name in banned_nodes:
@@ -102,9 +85,6 @@ def run_watchdog():
                         
                         # Tell Nginx to unban the node
                         requests.post(NGINX_CONTROL_URL, data={"unban_node": node_name})
-                        
-                        # Remove the physical iptables block
-                        os.system(f"docker exec synapse-gateway iptables -D OUTPUT -p tcp --dport {port} -j REJECT --reject-with tcp-reset")
                         
                         # Remove from history so it can be banned again if it dies
                         if node_name in banned_history:
