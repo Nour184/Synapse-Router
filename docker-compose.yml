@@ -4,6 +4,9 @@ services:
 
   gateway:
     build: ./gateway  #build the Dockerfile inside the gateway folder
+    container_name: synapse-gateway
+    cap_add:
+      - NET_ADMIN
     profiles: ["control"]
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -24,6 +27,18 @@ services:
     - "6379:6379"
     networks:
     - synaptic-network
+  
+  admin-dashboard:
+    build: ./admin
+    profiles: ["control"]
+    ports:
+      - "8501:8501"
+    depends_on:
+      - redis
+      - gateway
+    networks:
+      - synaptic-network
+
 
   worker-1:
       pid: "host"
@@ -97,6 +112,8 @@ services:
   watchdog:
     build: ./watchdog  #build the Dockerfile inside the gateway/watchdog folder
     profiles: ["control"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - REDIS_HOST=redis     # Tell Python where to find the database
     depends_on:
