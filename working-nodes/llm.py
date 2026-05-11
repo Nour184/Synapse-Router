@@ -21,7 +21,7 @@ class LlamaEngine:
 
         output = self.llm(
             formatted_prompt,
-            max_tokens=256,
+            max_tokens=1024,
             stop=["<|eot_id|>"], # Tells the model to stop generating when the turn is over
             echo=False
         )

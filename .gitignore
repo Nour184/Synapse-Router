@@ -16,3 +16,5 @@ gateway/logs/
 Thumbs.db
 
 */models
+
+*.pdf
