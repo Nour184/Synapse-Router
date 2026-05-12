@@ -8,5 +8,6 @@ ngx.ctx.req_id = req_id
 local state = ngx.shared.router_state
 state:incr("total_requests_sent", 1, 0)
 
--- We no longer save the request body to Redis here! 
--- Nginx handles retries natively via proxy_next_upstream by buffering the request in memory.
+if not state:get("start_time") then
+    state:set("start_time", ngx.now())
+end
