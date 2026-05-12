@@ -4,6 +4,9 @@ services:
 
   gateway:
     build: ./gateway  #build the Dockerfile inside the gateway folder
+    container_name: synapse-gateway
+    cap_add:
+      - NET_ADMIN
     profiles: ["control"]
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -25,59 +28,92 @@ services:
     networks:
     - synaptic-network
   
-  # worker:
-  #   build: ./working-nodes  #build the Dockerfile inside the working-nodes folder
-  #   profiles: ["compute"]
-  #   environment:
-  #     - OLLAMA_HOST=ollama   # Tell Python where to find the AI model
-  #   ports:
-  #     - "5002:5000" # Expose a range of ports for multiple worker instances
-  #   #depends_on:
-  #   #  - ollama  
-  #   networks:
-  #     - synaptic-network
+  admin-dashboard:
+    build: ./admin
+    profiles: ["control"]
+    ports:
+      - "8501:8501"
+    depends_on:
+      - redis
+      - gateway
+    networks:
+      - synaptic-network
+
 
   worker-1:
-    build: ./working-nodes
-    profiles: ["compute"]
-    ports:
-      - "5000:5000"
-      #   #depends_on:
-      #  - ollama  
-    networks:
-      - synaptic-network
+      pid: "host"
+      build:
+        context: ./working-nodes
+        args:
+          - HF_TOKEN=${HF_TOKEN}
+      profiles: ["compute"]
+      environment:
+        - PINECONE_API_KEY=${PC_TOKEN}
+        - SERVICE_NAME=worker-1
+        - PYTHONUNBUFFERED=1
+      ports: 
+        - "5000:5000"
+      deploy:
+        resources:
+          reservations:
+            devices:
+              - driver: nvidia
+                count: 1
+                capabilities: [gpu, utility]
+      networks:
+        - synaptic-network
 
   worker-2:
-    build: ./working-nodes
-    profiles: ["compute"]
-    ports:
-      - "5001:5000"
-      #   #depends_on:
-      #  - ollama  
-    networks:
-      - synaptic-network
+      pid: "host"
+      build: 
+        context: ./working-nodes
+        args:
+          - HF_TOKEN=${HF_TOKEN}
+      profiles: ["compute"]
+      environment:
+        - PINECONE_API_KEY=${PC_TOKEN} 
+        - SERVICE_NAME=worker-2
+        - PYTHONUNBUFFERED=1
+      ports: 
+        - "5001:5000"
+      deploy:
+        resources:
+          reservations:
+            devices:
+              - driver: nvidia
+                count: 1
+                capabilities: [gpu, utility]
+      networks:
+        - synaptic-network
 
   worker-3:
-    build: ./working-nodes
-    profiles: ["compute"]
-    ports:
-      - "5002:5000"
-      #   #depends_on:
-      #  - ollama  
-    networks:
-      - synaptic-network
-    
-  ollama:
-    image: "ollama/ollama:latest"
-    profiles: ["compute"]
-    volumes: 
-      - ./ollama_data:/root/.ollama # Save models here so they don't delete on restart
-    networks:
-      - synaptic-network
+      pid: "host"
+      build: 
+        context: ./working-nodes
+        args:
+          - HF_TOKEN=${HF_TOKEN}
+      profiles: ["compute"]
+      environment:
+        - PINECONE_API_KEY=${PC_TOKEN} 
+        - SERVICE_NAME=worker-3
+        - PYTHONUNBUFFERED=1
+      ports: 
+        - "5002:5000"
+      deploy:
+        resources:
+          reservations:
+            devices:
+              - driver: nvidia
+                count: 1
+                capabilities: [gpu, utility]
+      networks:
+        - synaptic-network
 
   watchdog:
     build: ./watchdog  #build the Dockerfile inside the gateway/watchdog folder
     profiles: ["control"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - REDIS_HOST=redis     # Tell Python where to find the database
     depends_on:
@@ -88,4 +124,4 @@ services:
 
 networks:
   synaptic-network:
-    driver: bridge     # Creates a private virtual Wi-Fi for containers
+    driver: bridge     # Creates a private virtual Wi-Fi for containersiners

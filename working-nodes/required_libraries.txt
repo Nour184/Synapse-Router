@@ -3,3 +3,5 @@ uvicorn
 requests
 sentence-transformers
 redis
+llama-cpp-python
+pinecone

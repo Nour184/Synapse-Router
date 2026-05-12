@@ -22,11 +22,17 @@ if not ngx.ctx.tries_set then
     ngx.ctx.tries_set = true
 end
 
--- 1. IF THIS IS A RETRY: Ban the node that just dropped the connection
+-- 1. IF THIS IS A RETRY: Smart Ban Logic
 local state_name = balancer.get_last_failure()
-if state_name == "failed" and ngx.ctx.last_node then
-    ngx.log(ngx.ERR, "TCP connection failed on " .. ngx.ctx.last_node .. ". Banning for 5 mins.")
-    state:set("banned_" .. ngx.ctx.last_node, true, 300) 
+if state_name and state_name ~= "" and ngx.ctx.last_node then
+    -- Only ban the node instantly if it is a hard network failure or gateway timeout.
+    -- If it's a 500 error (http_500), the node is alive but the AI script threw an error, so we DO NOT ban it!
+    if state_name == "error" or state_name == "timeout" or state_name == "http_502" or state_name == "http_503" or state_name == "http_504" then
+        ngx.log(ngx.ERR, "Hard Upstream failure (" .. state_name .. ") on " .. ngx.ctx.last_node .. ". Banning instantly.")
+        state:set("banned_" .. ngx.ctx.last_node, true)
+    else
+        ngx.log(ngx.WARN, "Soft Upstream failure (" .. state_name .. ") on " .. ngx.ctx.last_node .. ". Node is alive, Nginx is seamlessly retrying without banning.")
+    end
 end
 
 -- 2. FILTER OUT BANNED NODES

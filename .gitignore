@@ -14,3 +14,7 @@ gateway/logs/
 
 .DS_Store
 Thumbs.db
+
+*/models
+
+*.pdf

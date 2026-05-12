@@ -1,42 +1,26 @@
 import os
 import requests
-import redis
 import time
-
-REDIS_HOST = os.environ.get("REDIS_HOST", "redis")
-redis_client = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
-
 NGINX_STATE_URL = "http://gateway:80/watchdog/state"
 NGINX_CONTROL_URL = "http://gateway:80/watchdog/control"
 NGINX_API_URL = "http://gateway:80/api/"
 
-TIMEOUT_SECONDS = 310 #10 secs longer than nginx timeout 
+TIMEOUT_SECONDS = 5 #10 secs longer than nginx timeout 
 
-def recover_request(req_id):
-    """Helper function to pull from Redis, requeue, and clean up."""
-    payload = redis_client.hget("requests:payloads", req_id)
-    if payload:
-        try:
-            # FIRE AND FORGET: 0.5s timeout. It will send the data to Nginx, 
-            # then instantly raise a ReadTimeout so the Watchdog can keep looping.
-            requests.post(NGINX_API_URL, data=payload, headers={'Content-Type': 'application/json'}, timeout=0.5)
-        except requests.exceptions.ReadTimeout:
-            # This is expected behavior. The payload was sent successfully.
-            pass
-        except Exception as e:
-            print(f"Failed to requeue {req_id}: {e}")
-        
-        # Tell Nginx to stop tracking it, then delete from Redis
-        requests.post(NGINX_CONTROL_URL, data={"clear_req": req_id})
-        redis_client.hdel("requests:payloads", req_id)
-        return True
-    return False
+# Mapping of node names to their specific Tailscale ports
+NODE_PORTS = {
+    "worker-1": 5000,
+    "worker-2": 5001,
+    "worker-3": 5002
+}
+
+# Manual recover_request is no longer needed! Nginx will natively retry 
+# when we force-close the TCP connections using iptables.
 
 def run_watchdog():
-    print("Starting Watchdog with Bulk Recovery & 3-Strike Circuit Breaker...")
+    print("Starting Watchdog with Bulk Recovery & Instant Circuit Breaker...")
     
-    node_strikes = {}      
-    handled_timeouts = set() 
+    banned_history = set() 
 
     while True:
         try:
@@ -49,20 +33,16 @@ def run_watchdog():
             banned_nodes = state_data.get("banned", [])
             current_time = int(time.time())
             
-            # MEMORY LEAK FIX: Remove old req_ids that are no longer active in Nginx
-            handled_timeouts = {req for req in handled_timeouts if req in active_requests}
+            # Clean up history for nodes whose ban has expired
+            banned_history = {node for node in banned_history if node in banned_nodes}
             
-            # 1. BULK RECOVERY: Instantly evacuate all requests on banned nodes
-            for req_id, node_name in list(active_requests.items()):
-                if node_name in banned_nodes and req_id not in handled_timeouts:
-                    print(f"[BULK RECOVERY] {node_name} is banned! Instantly recovering {req_id}...")
-                    if recover_request(req_id):
-                        handled_timeouts.add(req_id)
-                    del active_requests[req_id]
+            # 1. BULK RECOVERY VIA TCP KILL IS REMOVED
+            # Nginx will patiently wait for the AI prompt to finish computing. 
+            # We just use the Banned list to prevent NEW requests from being routed to busy/dead nodes!
 
             # 2. TIMEOUT DETECTION: Check remaining active requests on healthy nodes
             for req_id, node_name in active_requests.items():
-                if req_id in handled_timeouts:
+                if node_name in banned_nodes:
                     continue 
                     
                 try:
@@ -71,24 +51,52 @@ def run_watchdog():
                     continue
 
                 if (current_time - req_timestamp) > TIMEOUT_SECONDS:
-                    print(f"[TIMEOUT] {req_id} stuck on {node_name}!")
+                    # The request is taking longer than TIMEOUT_SECONDS. Let's actively check if the node is alive!
+                    port = NODE_PORTS.get(node_name)
+                    if not port:
+                        continue
+                        
+                    health_url = f"http://100.127.81.29:{port}/api/health" # Using the Tailscale IP
                     
-                    node_strikes[node_name] = node_strikes.get(node_name, 0) + 1
-                    handled_timeouts.add(req_id)
-                    
-                    # Check for 3 Strikes
-                    if node_strikes[node_name] >= 3:
-                        print(f"[CIRCUIT BREAKER] {node_name} hit 3 strikes. Banning via API!")
+                    try:
+                        # Ping the health endpoint with a strict timeout
+                        health_resp = requests.get(health_url, timeout=5)
+                        
+                        # If it returns a 500 error, raise an HTTPError (which is a RequestException)
+                        health_resp.raise_for_status()
+                        
+                    except requests.exceptions.RequestException:
+                        # Scenario B: Node is DEAD, FROZEN, or returned a 500 error!
+                        print(f"[CIRCUIT BREAKER] {node_name} failed health check! Banning instantly!")
                         requests.post(NGINX_CONTROL_URL, data={"ban_node": node_name})
-                        node_strikes[node_name] = 0 
-                    
-                    print(f"[RECOVERY] Re-queueing {req_id} back to Gateway...")
-                    recover_request(req_id)
+                        banned_nodes.append(node_name) # Prevent pinging it again in this loop!
+
+            # 3. PROACTIVE RECOVERY: Ping banned nodes to see if they woke up
+            for node_name in banned_nodes:
+                port = NODE_PORTS.get(node_name)
+                if not port:
+                    continue
+                
+                health_url = f"http://100.127.81.29:{port}/api/health"
+                try:
+                    resp = requests.get(health_url, timeout=2)
+                    if resp.status_code == 200:
+                        print(f"[RECOVERY] {node_name} is back online! Unbanning.")
+                        
+                        # Tell Nginx to unban the node
+                        requests.post(NGINX_CONTROL_URL, data={"unban_node": node_name})
+                        
+                        # Remove from history so it can be banned again if it dies
+                        if node_name in banned_history:
+                            banned_history.remove(node_name)
+                            
+                except requests.exceptions.RequestException:
+                    pass # Node is still dead, keep it banned!
 
         except Exception as e:
             print(f"[ERROR] Watchdog issue: {e}")
             
-        time.sleep(5)
+        time.sleep(1)
 
 if __name__ == "__main__":
     run_watchdog()
